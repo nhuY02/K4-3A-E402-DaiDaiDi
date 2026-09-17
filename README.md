@@ -11,7 +11,7 @@
 | Trần Thị Như Ý | 2A202602372  |  |  |
 | Hoàng Văn Tài  | 2A202602400 |  |  |
 | Hà Trung Dũng | 2A202602948 |  |  |
-|  |  |  |  |
+| Nguyễn Minh Hiền | 2A202602759 |  |  |
 
 > Nhóm copy nguyên file README này về repo của mình, rồi điền bảng trên. Cột **Phần việc đảm nhiệm** ghi càng cụ thể càng tốt.
 
