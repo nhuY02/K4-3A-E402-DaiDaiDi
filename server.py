@@ -3,6 +3,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,15 +13,100 @@ from ai_service import ROOT, ServiceError, chat_answer, configuration, explain_s
 from slide_search import DECKS, page_record, search_slides
 
 PUBLIC = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
-          '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
+          '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
+          '/selection.css': ('selection.css', 'text/css')}
 SLIDE_FILES = {
     'd1-slide-hackathon.pdf': ROOT / 'K4-3A-Day05-06-AI-Product-Hackathon' / 'data' / 'vlearn-pack' / 'slides' / 'd1-slide-hackathon.pdf',
     'd2-slide-hackathon.pdf': ROOT / 'K4-3A-Day05-06-AI-Product-Hackathon' / 'data' / 'vlearn-pack' / 'slides' / 'd2-slide-hackathon.pdf',
 }
+MAX_SELECTED_TEXT = 2000
 
 def course_data():
     return {'lessons': [{'id': meta['id'], 'title': meta['title'], 'deck_id': deck_id,
                          'pages': 29} for deck_id, meta in DECKS.items()]}
+
+
+def slide_text_layer(deck_id, page):
+    """Return visible words and normalized PDF coordinates for one allowlisted page."""
+    record = page_record(deck_id, page)
+    if record is None:
+        raise ServiceError('invalid_slide', 'Không tìm thấy trang slide.', 404)
+    try:
+        import fitz
+    except ImportError as exc:
+        raise ServiceError('renderer_unavailable', 'Không thể đọc lớp văn bản của slide.', 503) from exc
+    try:
+        with fitz.open(SLIDE_FILES[DECKS[record['deck_id']]['file']]) as document:
+            pdf_page = document.load_page(int(page) - 1)
+            width, height = float(pdf_page.rect.width), float(pdf_page.rect.height)
+            items = []
+            horizontal_boxes = []
+            for block in pdf_page.get_text('dict').get('blocks', []):
+                if block.get('type') != 0:
+                    continue
+                for line in block.get('lines', []):
+                    direction = line.get('dir', (1.0, 0.0))
+                    if direction[0] > 0.98 and abs(direction[1]) < 0.02:
+                        horizontal_boxes.append(tuple(line['bbox']))
+            for x0, y0, x1, y1, text, block_no, line_no, word_no in pdf_page.get_text('words'):
+                text = str(text).strip()
+                if not text or x1 <= x0 or y1 <= y0:
+                    continue
+                center_x, center_y = (x0 + x1) / 2, (y0 + y1) / 2
+                if not any(left - 1 <= center_x <= right + 1 and top - 1 <= center_y <= bottom + 1
+                           for left, top, right, bottom in horizontal_boxes):
+                    continue
+                items.append({'text': text,
+                              'x': max(0.0, min(1.0, x0 / width)),
+                              'y': max(0.0, min(1.0, y0 / height)),
+                              'w': max(0.0, min(1.0, (x1 - x0) / width)),
+                              'h': max(0.0, min(1.0, (y1 - y0) / height)),
+                              'block': int(block_no), 'line': int(line_no),
+                              'word': int(word_no)})
+    except (OSError, KeyError, ValueError, RuntimeError) as exc:
+        raise ServiceError('renderer_unavailable', 'Không thể đọc lớp văn bản của slide.', 503) from exc
+    return {'deck_id': DECKS[record['deck_id']]['id'], 'page': int(page),
+            'width': width, 'height': height, 'items': items}
+
+
+def selection_service_payload(payload):
+    """Resolve a UI selection against the real page while retaining the CP3 contract."""
+    required = {'source', 'deck_id', 'page', 'selected_text'}
+    allowed = required | {'original_question', 'original_answer'}
+    if not isinstance(payload, dict) or not required.issubset(payload) or not set(payload).issubset(allowed):
+        raise ServiceError('invalid_input', 'Thiếu dữ liệu đoạn văn bản được chọn.', 400)
+    if payload['source'] not in {'slide', 'tutor'}:
+        raise ServiceError('invalid_input', 'Nguồn đoạn văn bản không hợp lệ.', 400)
+    for field in ('deck_id', 'selected_text'):
+        if not isinstance(payload[field], str):
+            raise ServiceError('invalid_input', 'Dữ liệu đoạn văn bản không hợp lệ.', 400)
+    original_question = payload.get('original_question', '')
+    original_answer = payload.get('original_answer', '')
+    if not isinstance(original_question, str) or not isinstance(original_answer, str):
+        raise ServiceError('invalid_input', 'Dữ liệu đoạn văn bản không hợp lệ.', 400)
+    selected = payload['selected_text'].strip()
+    if not selected or len(selected) > MAX_SELECTED_TEXT:
+        raise ServiceError('invalid_input', 'Đoạn được chọn trống hoặc quá dài.', 400)
+    record = page_record(payload['deck_id'], payload['page'])
+    if record is None:
+        raise ServiceError('invalid_slide', 'Không tìm thấy trang slide.', 404)
+    if payload['source'] == 'slide':
+        normalize = lambda value: ' '.join(value.split()).casefold()
+        if normalize(selected) not in normalize(record['page_text']):
+            raise ServiceError('invalid_input', 'Đoạn được chọn không thuộc trang slide hiện tại.', 400)
+        question = 'Giải thích đoạn văn bản được chọn từ slide.'
+        # ai_service validates that the selection belongs to original_answer.
+        # The selection itself is the smallest safe interaction container;
+        # factual authority remains the real page text in course_context.
+        original_answer = selected
+    else:
+        if len(original_question) > 4000 or len(original_answer) > 16000:
+            raise ServiceError('invalid_input', 'Ngữ cảnh hội thoại quá dài.', 400)
+        if selected not in original_answer:
+            raise ServiceError('invalid_input', 'Đoạn được chọn không thuộc câu trả lời Tutor.', 400)
+        question = original_question
+    return {'course_context': record['page_text'], 'original_question': question,
+            'original_answer': original_answer, 'selected_text': selected}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -56,6 +142,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {'status': 'ok', 'api_key_configured': bool(configuration()[0])})
         if path == '/api/course-data':
             return self.reply(200, course_data())
+        if path == '/api/slide-text-layer':
+            query = parse_qs(urlsplit(self.path).query)
+            try:
+                data = slide_text_layer(query.get('deck_id', [''])[0], query.get('page', [''])[0])
+                return self.reply(200, data)
+            except ServiceError as exc:
+                return self.reply(exc.status, {'error': exc.code, 'message': exc.message})
         if path == '/api/slide-image':
             query = parse_qs(urlsplit(self.path).query)
             deck_id, page = query.get('deck_id', [''])[0], query.get('page', [''])[0]
@@ -95,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.allowed():
             return self.reply(403, {'error': 'forbidden'})
-        if self.path not in {'/api/explain', '/api/search', '/api/chat'}:
+        if self.path not in {'/api/explain', '/api/explain-selection', '/api/search', '/api/chat'}:
             return self.reply(404, {'error': 'not_found'})
         try:
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -124,6 +217,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, chat_answer({'question': payload['question'],
                                              'course_context': record['page_text'],
                                              'related_context': related_context}) )
+            elif self.path.split('?', 1)[0] == '/api/explain-selection':
+                grounded = selection_service_payload(payload)
+                self.reply(200, explain_selection(grounded)['result'])
             else:
                 if not isinstance(payload, dict) or set(payload) != {'deck_id', 'page', 'original_question', 'original_answer', 'selected_text'}:
                     return self.reply(400, {'error': 'invalid_input', 'message': 'Thiếu tham chiếu slide.'})
@@ -135,10 +231,18 @@ class Handler(BaseHTTPRequestHandler):
                 grounded.pop('deck_id'); grounded.pop('page')
                 self.reply(200, explain_selection(grounded)['result'])
         except ServiceError as exc:
+            print(json.dumps({'event': 'api_error', 'stage': self.path.split('?', 1)[0],
+                              'exception_class': type(exc).__name__, 'http_status': exc.status,
+                              'service_error_code': exc.code}, ensure_ascii=True),
+                  file=sys.stderr, flush=True)
             self.reply(exc.status, {'error': exc.code, 'message': exc.message})
         except (ValueError, UnicodeError):
             self.reply(400, {'error': 'invalid_json', 'message': 'Dữ liệu gửi lên không hợp lệ.'})
-        except Exception:
+        except Exception as exc:
+            print(json.dumps({'event': 'api_error', 'stage': self.path.split('?', 1)[0],
+                              'exception_class': type(exc).__name__, 'http_status': 500,
+                              'service_error_code': 'internal_error'}, ensure_ascii=True),
+                  file=sys.stderr, flush=True)
             self.reply(500, {'error': 'internal_error', 'message': 'Backend gặp lỗi. Hãy thử lại.'})
 
 

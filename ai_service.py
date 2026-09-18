@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -66,6 +67,39 @@ class ServiceError(Exception):
         super().__init__(message)
         self.code, self.message, self.status = code, message, status
         self.audit = audit
+
+
+def classify_provider_error(exc, stage):
+    """Emit only safe provider metadata and return a stable failure code."""
+    status = getattr(exc, 'status_code', None)
+    request_id = getattr(exc, 'request_id', None)
+    body = getattr(exc, 'body', None)
+    provider_code = None
+    if isinstance(body, dict):
+        error = body.get('error', body)
+        if isinstance(error, dict):
+            provider_code = error.get('code') or error.get('type')
+    name = type(exc).__name__
+    lowered = f'{name} {provider_code or ""}'.casefold()
+    if 'insufficient_quota' in lowered:
+        classification = 'insufficient_quota'
+    elif status == 429 or 'ratelimit' in lowered:
+        classification = 'rate_limit'
+    elif status in (401, 403) or 'authentication' in lowered or 'permission' in lowered:
+        classification = 'authentication_error'
+    elif 'connection' in lowered or 'timeout' in lowered:
+        classification = 'network_error'
+    elif status == 404 or 'model_not_found' in lowered:
+        classification = 'model_error'
+    elif status == 400 or 'badrequest' in lowered:
+        classification = 'invalid_request'
+    else:
+        classification = 'provider_error'
+    diagnostic = {'event': 'openai_error', 'stage': stage, 'exception_class': name,
+                  'http_status': status, 'openai_error_code': provider_code,
+                  'request_id': request_id, 'classification': classification}
+    print(json.dumps(diagnostic, ensure_ascii=True), file=sys.stderr, flush=True)
+    return classification
 
 
 def configuration():
@@ -157,14 +191,16 @@ def explain_selection(payload):
         record['model_action'] = result['action']
         record['result'] = result
     except APIError as exc:
-        record['error'] = type(exc).__name__  # Never log provider exception text/headers.
-        raise ServiceError('provider_error', 'Không gọi được AI. Kiểm tra khóa API, hạn mức và kết nối rồi thử lại.', audit=record) from None
+        classification = classify_provider_error(exc, 'explain_selection.responses.create')
+        record['error'] = classification
+        raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', audit=record) from None
     except (ValueError, TypeError, AttributeError):
         record['error'] = 'invalid_model_response'
         raise ServiceError('invalid_model_response', 'AI trả về dữ liệu chưa hợp lệ. Hãy thử lại.', audit=record) from None
-    except Exception:
-        record['error'] = 'unexpected_provider_error'
-        raise ServiceError('provider_error', 'Không xử lý được phản hồi AI. Hãy thử lại.', audit=record) from None
+    except Exception as exc:
+        classification = classify_provider_error(exc, 'explain_selection.unexpected')
+        record['error'] = classification
+        raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', audit=record) from None
     finally:
         record['latency_ms'] = round((time.perf_counter() - started) * 1000)
         record['event'] = 'completed'
@@ -198,11 +234,13 @@ def chat_answer(payload):
         if response.status != 'completed' or not isinstance(response.output_text, str) or not response.output_text.strip():
             raise ValueError('Incomplete model response')
         return {'answer': redact(response.output_text.strip(), key)}
-    except APIError:
-        raise ServiceError('provider_error', 'Không gọi được AI. Kiểm tra khóa API, hạn mức và kết nối rồi thử lại.', 502) from None
+    except APIError as exc:
+        classification = classify_provider_error(exc, 'chat_answer.responses.create')
+        raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', 502) from None
     except (ValueError, TypeError, AttributeError):
         raise ServiceError('invalid_model_response', 'AI trả về dữ liệu chưa hợp lệ. Hãy thử lại.', 502) from None
     except ServiceError:
         raise
-    except Exception:
-        raise ServiceError('provider_error', 'Không xử lý được phản hồi AI. Hãy thử lại.', 502) from None
+    except Exception as exc:
+        classification = classify_provider_error(exc, 'chat_answer.unexpected')
+        raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', 502) from None

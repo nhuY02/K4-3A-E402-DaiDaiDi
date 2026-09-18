@@ -8,7 +8,7 @@ class Frontend(Handler):
     def do_GET(self):
         if not self.allowed():
             return self.reply(403, {'error': 'forbidden'})
-        if self.path.split('?', 1)[0] not in {'/api/course-data', '/api/slide-image'}:
+        if self.path.split('?', 1)[0] not in {'/api/course-data', '/api/slide-image', '/api/slide-text-layer'}:
             return super().do_GET()
         try:
             connection = http.client.HTTPConnection('127.0.0.1', 8000, timeout=20)
@@ -25,7 +25,7 @@ class Frontend(Handler):
     def do_POST(self):
         if not self.allowed():
             return self.reply(403, {'error': 'forbidden'})
-        if self.path not in {'/api/explain', '/api/search', '/api/chat'}:
+        if self.path not in {'/api/explain', '/api/explain-selection', '/api/search', '/api/chat'}:
             return self.reply(404, {'error': 'not_found'})
         try:
             length = int(self.headers.get('Content-Length', '0'))

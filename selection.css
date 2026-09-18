@@ -1,0 +1,42 @@
+/* Explicit interaction layer overrides for the PNG-backed slide viewer. */
+.slide-page {
+  position: relative;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.slide-page .slide-image {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.slide-text-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.slide-text-layer span {
+  position: absolute;
+  display: block;
+  width: max-content;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  transform-origin: 0 0;
+}
+
+.slide-text-layer span::selection {
+  color: transparent;
+  background: rgba(54, 132, 210, 0.42);
+}
