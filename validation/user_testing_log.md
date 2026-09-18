@@ -8,7 +8,7 @@
 
 - **Thời gian thực hiện**: 17/09/2026 – 18/09/2026.
 - **Môi trường thử nghiệm**: VLearn Prototype cục bộ (`http://127.0.0.1:5173/` kết nối backend `server.py` và OpenAI API `gpt-4.1-mini`).
-- **Tổng số người tham gia**: **5 người** (đạt yêu cầu ≥ 5 người ngoài nhóm):
+- **Tổng số người tham gia**: **2 người**:
   - **Willing User 1 (CP1)**: Trần Anh Vũ — Học viên chương trình Nhân tài AI Thực Chiến.
   - **Willing User 2 (CP1)**: Nguyễn Trung Kiên — Học viên chương trình Nhân tài AI Thực Chiến.
 
