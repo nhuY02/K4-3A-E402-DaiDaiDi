@@ -40,3 +40,32 @@
   color: transparent;
   background: rgba(54, 132, 210, 0.42);
 }
+
+.clarify-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.clarify-option {
+  max-width: 100%;
+  padding: 8px 11px;
+  border: 1px solid #b9d3e9;
+  border-radius: 999px;
+  background: #f5f9fd;
+  color: #145392;
+  text-align: left;
+  line-height: 1.35;
+}
+
+.clarify-option:hover:not(:disabled),
+.clarify-option:focus-visible {
+  background: #e9f3fb;
+  border-color: #7eacd2;
+}
+
+.clarify-options.resolved .clarify-option:disabled {
+  opacity: 0.48;
+}

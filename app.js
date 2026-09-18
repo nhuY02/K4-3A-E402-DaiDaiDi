@@ -4,8 +4,12 @@ const $ = selector => document.querySelector(selector);
 const state = {
   screen: 'home', lesson: null, deckId: null, page: 1, tutorOpen: false, zoom: 100,
   selectedText: '', selectionSource: null, selectedMessage: null,
+  selectionDeckId: null, selectionPage: null,
   pending: null, chatPending: null, textLayerRequest: 0, textItems: [], slideDimensions: null,
+  chatHistory: [], conversationGeneration: 0,
 };
+const HISTORY_MAX_MESSAGES = 8;
+const HISTORY_MAX_CHARS = 8000;
 let courseData = null;
 let selectionTimer = null;
 
@@ -21,6 +25,7 @@ const on = (selector, event, handler) => {
 window.__vlearnEarly = true;
 
 function showHome() {
+  resetChat({render: false});
   state.screen = 'home';
   state.tutorOpen = false;
   $('#home-nav').hidden = false;
@@ -57,19 +62,22 @@ async function loadCourse() {
 function openLesson(id, page = 1) {
   const lesson = (courseData?.lessons || []).find(item => item.id === id);
   if (!lesson) return;
+  const continuingConversation = state.screen === 'lesson';
+  const tutorWasOpen = state.tutorOpen;
+  if (!continuingConversation) resetChat({render: false});
   state.screen = 'lesson';
   state.lesson = lesson;
   state.deckId = lesson.deck_id;
   state.page = page;
-  state.tutorOpen = false;
+  state.tutorOpen = continuingConversation && tutorWasOpen;
   state.zoom = 100;
   $('#slide-page').style.transform = 'scale(1)';
   $('#zoom-label').textContent = '100%';
   $('#home-nav').hidden = true;
   $('#home-screen').hidden = true;
   $('#lesson-screen').hidden = false;
-  $('#tutor').hidden = true;
-  $('#conversation').replaceChildren();
+  $('#tutor').hidden = !state.tutorOpen;
+  if (!continuingConversation) $('#conversation').replaceChildren();
   $('#lesson-heading').textContent = `Bài ${id === 'day01' ? '1' : '2'} · ${id.toUpperCase()}`;
   renderSlideItems();
   loadSlide();
@@ -226,6 +234,43 @@ function scrollChat() {
   });
 }
 
+function rememberChatMessage(role, content) {
+  if (!['user', 'assistant'].includes(role) || typeof content !== 'string' || !content.trim()) return;
+  state.chatHistory.push({role, content: content.trim()});
+}
+
+function getRecentChatHistory() {
+  // Model context is capped at the newest 8 messages and 8,000 characters.
+  const recent = [];
+  let characters = 0;
+  for (let index = state.chatHistory.length - 1; index >= 0 && recent.length < HISTORY_MAX_MESSAGES; index -= 1) {
+    const item = state.chatHistory[index];
+    if (!['user', 'assistant'].includes(item?.role) || typeof item.content !== 'string') continue;
+    const content = item.content.trim();
+    if (!content || characters + content.length > HISTORY_MAX_CHARS) break;
+    recent.push({role: item.role, content});
+    characters += content.length;
+  }
+  return recent.reverse();
+}
+
+function resetChat({render = true} = {}) {
+  state.conversationGeneration += 1;
+  state.chatPending?.abort();
+  state.pending?.abort();
+  state.chatPending = null;
+  state.pending = null;
+  state.chatHistory = [];
+  const input = $('#chat-input');
+  if (input) input.value = '';
+  const conversation = $('#conversation');
+  if (conversation) conversation.replaceChildren();
+  const send = $('#send-message');
+  if (send) send.disabled = true;
+  hideAction();
+  if (render && state.tutorOpen) initialChat();
+}
+
 function appendMessage(text, type = 'assistant', options = {}) {
   const node = document.createElement('div');
   node.className = `message ${type}`;
@@ -257,6 +302,40 @@ function appendSelectionRequest(selectedText) {
   quote.textContent = `“${excerpt}”`;
   node.append(label, quote);
   $('#conversation').append(node);
+  scrollChat();
+  return node;
+}
+
+function visibleAssistantText(data, selection = false) {
+  const fields = selection
+    ? {explain: 'explanation', clarify: 'question', no_grounding: 'message', refuse: 'message'}
+    : {answer: 'answer', clarify: 'question', no_grounding: 'message', refuse: 'message'};
+  const field = fields[data?.action];
+  return field && typeof data[field] === 'string' ? data[field].trim() : '';
+}
+
+function renderClarifyOptions(messageNode, options) {
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) return;
+  const values = options.filter(option => typeof option === 'string' && option.trim()).map(option => option.trim());
+  if (values.length < 2) return;
+  const group = document.createElement('div');
+  group.className = 'clarify-options';
+  group.setAttribute('aria-label', 'Các lựa chọn làm rõ');
+  values.forEach(value => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'clarify-option';
+    button.textContent = value;
+    button.addEventListener('click', () => {
+      if (group.dataset.resolved === 'true' || state.chatPending || state.pending) return;
+      group.dataset.resolved = 'true';
+      group.classList.add('resolved');
+      group.querySelectorAll('button').forEach(option => { option.disabled = true; });
+      sendChatQuestion(value);
+    });
+    group.append(button);
+  });
+  messageNode.append(group);
   scrollChat();
 }
 
@@ -298,6 +377,8 @@ function hideAction() {
   state.selectedText = '';
   state.selectionSource = null;
   state.selectedMessage = null;
+  state.selectionDeckId = null;
+  state.selectionPage = null;
 }
 
 function clearSelection() {
@@ -308,6 +389,20 @@ function clearSelection() {
 
 function selectionElement(node) {
   return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+}
+
+function selectedSlideText(range, layer) {
+  // Selection.toString() concatenates adjacent absolutely-positioned spans.
+  // Reconstruct the visible phrase from intersected line spans with spaces.
+  const pieces = [...layer.querySelectorAll('span')].filter(span => range.intersectsNode(span)).map(span => {
+    const text = span.textContent || '';
+    let start = 0;
+    let end = text.length;
+    if (span.contains(range.startContainer)) start = range.startOffset;
+    if (span.contains(range.endContainer)) end = range.endOffset;
+    return text.slice(Math.max(0, start), Math.max(start, end));
+  }).filter(Boolean);
+  return pieces.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function inspectSelection() {
@@ -329,11 +424,14 @@ function inspectSelection() {
   } else {
     return hideAction();
   }
-  const selectedText = selection.toString().replace(/\s+/g, ' ').trim();
+  const selectedText = (source === 'slide' ? selectedSlideText(range, layer) : selection.toString())
+    .replace(/\s+/g, ' ').trim();
   if (selectedText.length < 2 || selectedText.length > 2000) return hideAction();
   state.selectedText = selectedText;
   state.selectionSource = source;
   state.selectedMessage = message;
+  state.selectionDeckId = state.deckId;
+  state.selectionPage = state.page;
   const action = $('#explain-selection');
   const rect = range.getBoundingClientRect();
   action.hidden = false;
@@ -344,23 +442,33 @@ function inspectSelection() {
 }
 
 async function explainSelection() {
-  if (!state.selectedText || !state.selectionSource || state.pending || !state.lesson) return;
+  if (!state.selectedText || !state.selectionSource || state.pending || state.chatPending || !state.lesson) return;
+  if (state.selectionDeckId !== state.deckId || state.selectionPage !== state.page) return hideAction();
   const selectedText = state.selectedText;
   const source = state.selectionSource;
   const selectedMessage = state.selectedMessage;
+  const selectedDeckId = state.selectionDeckId;
+  const selectedPage = state.selectionPage;
   const originalAnswer = source === 'tutor' ? (selectedMessage?.querySelector('.answer-text')?.textContent || '') : '';
   const originalQuestion = source === 'tutor' ? (selectedMessage?.dataset.originalQuestion || '') : '';
   if (source === 'tutor' && !originalAnswer.includes(selectedText)) return hideAction();
 
   clearSelection();
   if (!state.tutorOpen) openTutor({focus: false});
+  const previousHistory = getRecentChatHistory();
+  const semanticRequest = `Giải thích đoạn này: “${selectedText}”`;
   appendSelectionRequest(selectedText);
-  const pending = appendMessage('Đang giải thích đoạn bạn chọn…', 'assistant', {originalQuestion: 'Giải thích đoạn này'});
+  rememberChatMessage('user', semanticRequest);
+  const pending = appendMessage('Đang giải thích đoạn bạn chọn…', 'assistant', {originalQuestion: semanticRequest});
   pending.setAttribute('aria-busy', 'true');
   const controller = new AbortController();
   state.pending = controller;
+  const generation = state.conversationGeneration;
   try {
-    const request = {source, deck_id: state.deckId, page: state.page, selected_text: selectedText};
+    const request = {
+      source, deck_id: selectedDeckId, page: selectedPage, selected_text: selectedText,
+      history: previousHistory, current_request: semanticRequest,
+    };
     if (source === 'tutor') {
       request.original_question = originalQuestion;
       request.original_answer = originalAnswer;
@@ -370,56 +478,74 @@ async function explainSelection() {
       body: JSON.stringify(request),
     });
     const data = await response.json();
+    if (generation !== state.conversationGeneration) return;
     if (!response.ok) {
       throw Error(response.status >= 500
         ? 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.'
         : (data.message || 'Không thể giải thích đoạn đã chọn.'));
     }
-    const field = {explain: 'explanation', clarify: 'question', no_grounding: 'message', refuse: 'message'}[data.action];
-    if (!field || !data[field]) throw Error('Phản hồi AI không hợp lệ.');
-    pending.querySelector('.answer-text').textContent = data[field];
+    const answer = visibleAssistantText(data, true);
+    if (!answer) throw Error('Phản hồi AI không hợp lệ.');
+    pending.querySelector('.answer-text').textContent = answer;
+    rememberChatMessage('assistant', answer);
+    if (data.action === 'clarify') renderClarifyOptions(pending, data.clarify_options);
   } catch (error) {
+    if (generation !== state.conversationGeneration) return;
     pending.querySelector('.answer-text').textContent = error.name === 'AbortError'
       ? 'Yêu cầu đã bị hủy.'
       : (error.message || 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.');
   } finally {
+    if (generation !== state.conversationGeneration) return;
     pending.removeAttribute('aria-busy');
     if (state.pending === controller) state.pending = null;
     scrollChat();
   }
 }
 
-async function submitChat(event) {
-  event.preventDefault();
-  const input = $('#chat-input');
-  const question = input.value.trim();
-  if (!question || state.chatPending || !state.lesson) return;
+async function sendChatQuestion(question) {
+  question = String(question || '').trim();
+  if (!question || state.chatPending || state.pending || !state.lesson) return;
+  const previousHistory = getRecentChatHistory();
   appendMessage(question, 'user');
+  rememberChatMessage('user', question);
+  const input = $('#chat-input');
   input.value = '';
   $('#send-message').disabled = true;
   const pending = appendMessage('Đang suy nghĩ…', 'assistant', {originalQuestion: question});
   pending.setAttribute('aria-busy', 'true');
   const controller = new AbortController();
   state.chatPending = controller;
+  const generation = state.conversationGeneration;
   const timeout = setTimeout(() => controller.abort(), 60000);
   try {
     const response = await fetch('/api/chat', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, signal: controller.signal,
-      body: JSON.stringify({deck_id: state.deckId, page: state.page, question}),
+      body: JSON.stringify({deck_id: state.deckId, page: state.page, question, history: previousHistory}),
     });
     const data = await response.json();
+    if (generation !== state.conversationGeneration) return;
     if (!response.ok) throw Error(data.message || 'Không gọi được AI. Hãy thử lại.');
-    if (typeof data.answer !== 'string' || !data.answer.trim()) throw Error('Phản hồi AI không hợp lệ.');
-    pending.querySelector('.answer-text').textContent = data.answer;
+    const answer = visibleAssistantText(data);
+    if (!answer) throw Error('Phản hồi AI không hợp lệ.');
+    pending.querySelector('.answer-text').textContent = answer;
+    rememberChatMessage('assistant', answer);
+    if (data.action === 'clarify') renderClarifyOptions(pending, data.clarify_options);
   } catch (error) {
+    if (generation !== state.conversationGeneration) return;
     pending.querySelector('.answer-text').textContent = error.name === 'AbortError' ? 'Yêu cầu đã hết thời gian. Hãy thử lại.' : (error.message || 'Không gọi được AI. Hãy thử lại.');
   } finally {
     clearTimeout(timeout);
+    if (generation !== state.conversationGeneration) return;
     pending.removeAttribute('aria-busy');
     if (state.chatPending === controller) state.chatPending = null;
     $('#send-message').disabled = !input.value.trim();
     scrollChat();
   }
+}
+
+function submitChat(event) {
+  event.preventDefault();
+  sendChatQuestion($('#chat-input').value);
 }
 
 on('#home-brand', 'click', event => { event.preventDefault(); showHome(); });
@@ -455,16 +581,16 @@ on('#conversation', 'keyup', inspectSelection);
 on('#slide-text-layer', 'mouseup', () => setTimeout(inspectSelection, 0));
 on('#slide-text-layer', 'keyup', inspectSelection);
 on('#chat-input', 'input', event => {
-  $('#send-message').disabled = !event.target.value.trim() || Boolean(state.chatPending);
+  $('#send-message').disabled = !event.target.value.trim() || Boolean(state.chatPending || state.pending);
 });
 on('#chat-input', 'keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    if (!state.chatPending && event.currentTarget.value.trim()) $('#chat-form').requestSubmit();
+    if (!state.chatPending && !state.pending && event.currentTarget.value.trim()) $('#chat-form').requestSubmit();
   }
 });
 on('#chat-form', 'submit', submitChat);
-on('#new-chat', 'click', initialChat);
+on('#new-chat', 'click', () => resetChat());
 
 document.addEventListener('mousedown', event => {
   if (!event.target.closest?.('#explain-selection')) hideAction();
