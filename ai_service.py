@@ -212,6 +212,12 @@ def validate_result(result):
     return result
 
 
+def log_latency(label, started):
+    latency_ms = round((time.perf_counter() - started) * 1000)
+    print(f"[timer] {label}: {latency_ms} ms", flush=True)
+    return latency_ms
+
+
 def explain_selection(payload):
     validate_payload(payload)
     key, model = configuration()
@@ -261,13 +267,13 @@ def explain_selection(payload):
         record['error'] = classification
         raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', audit=record) from None
     finally:
-        record['latency_ms'] = round((time.perf_counter() - started) * 1000)
+        record['latency_ms'] = log_latency('explain_selection', started)
         record['event'] = 'completed'
         try:
             write_log(record, key)
         except OSError:
             raise ServiceError('logging_unavailable', 'Đã gọi AI nhưng không lưu được nhật ký. Kiểm tra thư mục logs.', 503) from None
-    return {'result': redact(result, key), 'audit': redact(record, key)}
+    return {'result': redact(result, key), 'audit': redact(record, key), 'latency_ms': record['latency_ms']}
 
 
 def validate_chat_payload(payload):
@@ -286,13 +292,15 @@ def chat_answer(payload):
     if not key:
         raise ServiceError('missing_api_key', 'Backend chưa có OPENAI_API_KEY. Hãy thêm khóa vào tệp .env.', 503)
     request = json.dumps(payload, ensure_ascii=False)
+    started = time.perf_counter()
     try:
         with OpenAI(api_key=key, base_url='https://api.openai.com/v1', timeout=45, max_retries=0) as client:
             response = client.responses.create(model=model, instructions=CHAT_PROMPT, input=request,
                                                store=False, max_output_tokens=700)
         if response.status != 'completed' or not isinstance(response.output_text, str) or not response.output_text.strip():
             raise ValueError('Incomplete model response')
-        return {'answer': redact(response.output_text.strip(), key)}
+        answer = redact(response.output_text.strip(), key)
+        return {'answer': answer, 'latency_ms': log_latency('chat_answer', started)}
     except APIError as exc:
         classification = classify_provider_error(exc, 'chat_answer.responses.create')
         raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', 502) from None
@@ -351,6 +359,7 @@ def _live_response(payload, instructions, schema, schema_name, validator, stage,
     key, model = configuration()
     if not key:
         raise ServiceError('missing_api_key', 'Backend chưa có OPENAI_API_KEY. Hãy thêm khóa vào tệp .env.', 503)
+    started = time.perf_counter()
     try:
         with OpenAI(api_key=key, base_url='https://api.openai.com/v1', timeout=45, max_retries=0) as client:
             response = client.responses.create(
@@ -361,7 +370,9 @@ def _live_response(payload, instructions, schema, schema_name, validator, stage,
             )
         if response.status != 'completed':
             raise ValueError('Incomplete model response')
-        return redact(validator(json.loads(response.output_text)), key)
+        result = redact(validator(json.loads(response.output_text)), key)
+        result['latency_ms'] = log_latency(stage, started)
+        return result
     except APIError as exc:
         classification = classify_provider_error(exc, stage)
         raise ServiceError(classification, 'Trợ giảng AI đang tạm thời không phản hồi. Hãy thử lại.', 502) from None
