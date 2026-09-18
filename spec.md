@@ -8,20 +8,12 @@ Hướng: [ x ] A — VLearn  [ ] B — Trợ lý Học viên  [ ] C — Làn m�
 Loại: [ x ] Tối ưu tính năng có sẵn  [ x ] Tính năng mới
 
 ## §1. User & Job
-- Job executor + workflow (đính kèm worksheet JTBD / ảnh sơ đồ):
-
-| STT | Tên Willing User | Role |
-|---|---|---|
-| 1 | Trần Anh Vũ | Học viên chương trình Nhân tài AI Thực Chiến |
-| 2 | Nguyễn Trung Kiên | Học viên chương trình Nhân tài AI Thực Chiến | 
-
-Link Workflow: https://drive.google.com/drive/folders/1a0eAMSBz2b1AnQAbqDl7oiawETLfFttW?usp=sharing
-
+- Job executor + workflow (đính kèm worksheet JTBD / ảnh sơ đồ): Học viên khóa IV chương trình Nhân tài AI thực chiến ([link](https://drive.google.com/drive/folders/1a0eAMSBz2b1AnQAbqDl7oiawETLfFttW?usp=sharing))
 - Core JTBD (không tên sản phẩm/AI trong câu): Tìm kiếm tài liệu; hỏi lại ý/mục chưa hiểu trong phần trả lời của Tutor Chat
 - Problem statement (KHÔNG chữ AI): Học viên gặp khó khăn trong việc tìm kiếm, hiểu và tổng hợp thông tin từ lesson/course materials; Tutor AI hiện tại chưa phải lúc nào cũng cung cấp câu trả lời đủ sát với context và nhu cầu của từng học viên.
 - Evidence (chuẩn A và/hoặc B — log đầy đủ trong repo):
-  - **Chuẩn B — quan sát trực tiếp (2 phiên, có ghi màn hình):** cho willing user làm đúng 1 task *"đang học Day 03 · Embedding & Vector Search, tìm lại chỗ đã giải thích khái niệm này ở bài trước và đọc đúng trang đó"*. Cả 2 user đều phải thoát bài đang học → mở lại danh sách bài → đoán tên file slide → cuộn PDF thủ công. Log: `evidence/observe-01.md`, `evidence/observe-02.md` + record màn hình (`CP3.mp4` là bản demo lát cắt dựng lại từ đúng task này).
-  - **Chuẩn A — khảo sát học viên cùng chương trình:** form 8 câu, gửi trong Zone C, thu về **n = 32 / 45** (71 %). Raw response: `evidence/survey-raw.csv`.
+  - **Chuẩn B — quan sát trực tiếp:** Cho 2 học viên làm đúng 1 task *"đang học Day 03 · Embedding & Vector Search, tìm lại chỗ đã giải thích khái niệm này ở bài trước và đọc đúng trang đó"*. Cả 2 user đều phải thoát bài đang học → mở lại danh sách bài → đoán tên file slide → cuộn PDF thủ công. 
+  - **Chuẩn A — khảo sát học viên cùng chương trình:** form 10 câu, thu về **n = 32 / 45** (71 %). Raw response: `evidence/survey-raw.csv`.
 - Số liệu mining / kết quả khảo sát (n = ?, % xác nhận):
   - **n = 32** (trên 45 học viên trong phạm vi).
   - **28/32 (87,5 %)** xác nhận đã từng phải quay lại bài cũ để tìm lại một khái niệm trong lúc học bài mới.
@@ -48,7 +40,7 @@ Hiện trạng ghi nhận trên VLearn:
 Hai vấn đề này là hai bước liền nhau của cùng một job: **tìm đúng chỗ** → **hiểu đúng ý**. Vì vậy nhóm build **AI learning assistant** gồm đúng 2 giải pháp:
 
 1. **Context-aware Search (CES)** — thêm ô tìm kiếm vào panel *Nội dung bài học* (placeholder: *"Tìm trong các bài giảng đã học…"*). Học viên **gõ từ khoá**, hệ thống tìm trên **toàn bộ tài liệu của các bài đã học** (không giới hạn trong bài đang mở) và trả về danh sách kết quả, mỗi kết quả gồm: **tên bài · tên file nguồn · số trang · đoạn trích** và nút **"Mở trang"** để nhảy thẳng tới đúng trang đó. *(Tính năng mới)*
-2. **Context-aware Q&A (CQ)** — Trợ giảng AI **bám theo thứ đang mở**: header panel luôn hiển thị `Đang mở: <file/slide> · trang N`, và khi học viên **bôi đen một đoạn** hoặc nhấn vào cụm từ được gạch chân thì AI giải thích **đúng đoạn đó** trong ngữ cảnh trang hiện tại, kèm cảnh báo *"Trợ giảng AI có thể sai — hãy đối chiếu với bài giảng"*. *(Tối ưu Tutor AI có sẵn)*
+2. **Context-aware Q&A (CQ)** — Trợ giảng AI **bám theo thứ đang mở**: khi học viên **bôi đen một đoạn** hoặc nhấn vào cụm từ được gạch chân thì AI giải thích **đúng đoạn đó** trong ngữ cảnh trang hiện tại, kèm cảnh báo *"Trợ giảng AI có thể sai — hãy đối chiếu với bài giảng"*. *(Tối ưu Tutor AI có sẵn)*
 
 **Luồng đã dựng ở CP3 (xem `CP3.mp4`) — hai giải pháp nối thành một mạch:**
 gõ từ khoá `embedding vector` → **6 kết quả** (semantic search trên các bài đã học) → chọn kết quả *Day 01 · AI & LLM Foundation — d1-slide-hackathon.pdf · trang 12* → bấm **Mở trang** → mở đúng trang 12 của file đó → ngữ cảnh Trợ giảng AI **tự đổi theo** sang `d1-slide-hackathon.pdf · trang 12` → bôi đen đoạn chưa hiểu → AI giải thích ngay đoạn đang đọc.
@@ -68,7 +60,7 @@ gõ từ khoá `embedding vector` → **6 kết quả** (semantic search trên c
 | 5 | Sinh flashcard / quiz từ lesson | 45 | 1 / ngày | 0.02 | 6 | 13.500 | ❌ Loại |
 | 6 | Knowledge-graph navigation | 45 | 2 / ngày | 0.05 | 3 | 5.400 | ❌ Loại |
 
-*Nguồn số:* 45 = số học viên trong phạm vi triển khai (Zone C). Tần suất lấy từ khảo sát ở §1 (**n = 32**); chi phí/lần là ước tính token của model dùng trong prototype (embedding + rerank cho CES; embedding + sinh câu trả lời cho CQ).
+*Nguồn số:* 45 = số học viên trong phạm vi triển khai. Tần suất lấy từ khảo sát ở §1 (**n = 32**); chi phí/lần là ước tính token của model dùng trong prototype (embedding + rerank cho CES; embedding + sinh câu trả lời cho CQ).
 
 ### Ứng viên ĐÃ LOẠI + vì sao
 
@@ -192,4 +184,6 @@ gõ từ khoá `embedding vector` → **6 kết quả** (semantic search trên c
 | 2026-09-17 07:32 UTC | Sửa prompt để nhận diện đại từ/cụm từ mơ hồ, thêm nhánh `clarify` rõ hơn | Từ nhóm lỗi `no_clarification` (5 case: case-03, 08, 13, 14, 15) — sau khi sửa, case-03/13/14 đã đúng, còn case-08/15 vẫn sai (từ mơ hồ nằm giữa 2 khái niệm liền nhau, khó hơn mơ hồ dạng đại từ) |
 | 2026-09-17 (sau CP3) | Cập nhật §1 với evidence thật (khảo sát n=32, 2 phiên quan sát) thay cho khung trống | Theo checklist chuẩn A/B của guide — spec trước đó chưa có số liệu kiểm chứng được |
 | 2026-09-17 (sau CP3) | Viết lại §2 theo đúng luồng đã dựng trong `CP3.mp4` (tìm theo từ khoá trên toàn bộ bài đã học, không phải lọc theo module) | Mô tả cũ không khớp với demo thực tế đã quay |
-| *(để trống)* | Sửa `no_grounding` cho case-20 (khẳng định tuyệt đối chưa được nhận diện) | Từ nhóm lỗi `wrong_action` — ưu tiên thấp hơn `no_clarification` theo `failure_analysis.md`, cần xử lý trước CP6 |
+| 2026-09-18 (sau user testing) | Hoàn thành thử nghiệm 5 người dùng (gồm 2 willing users Trần Anh Vũ & Nguyễn Trung Kiên từ CP1); ghi nhật ký tại `validation/user_testing_log.md` | Thực hiện theo yêu cầu vòng validation: kiểm chứng thực tế trên người dùng thật |
+| 2026-09-18 (sau user testing) | **Điều chỉnh sản phẩm**: Duy trì persistent search state khi chuyển slide và chuẩn hóa format phản hồi AI (mở đầu bằng câu định nghĩa trực diện TL;DR < 25 từ) | Từ phản hồi của Trần Anh Vũ (mất công gõ search lại khi chuyển slide) và Nguyễn Trung Kiên (câu giải thích cần có tóm tắt cốt lõi ngay câu đầu) |
+| 2026-09-18 | Sửa `no_grounding` cho case-20 (khẳng định tuyệt đối chưa được nhận diện) | Từ nhóm lỗi `wrong_action` — ưu tiên thấp hơn `no_clarification` theo `failure_analysis.md`, hoàn thiện trước CP6 |
